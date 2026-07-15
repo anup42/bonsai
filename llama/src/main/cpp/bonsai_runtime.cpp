@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -39,6 +40,7 @@ constexpr int N_THREADS_HEADROOM = 2;
 constexpr int CPU_BATCH_SIZE = 256;
 constexpr int HYBRID_GPU_BATCH_SIZE = 1;
 constexpr int OVERFLOW_HEADROOM = 8;
+constexpr int THINKING_TOKEN_BUDGET = 256;
 
 constexpr const char * ROLE_SYSTEM = "system";
 constexpr const char * ROLE_USER = "user";
@@ -47,6 +49,7 @@ constexpr const char * DISABLED_THINKING_SUFFIX = "<think>\n\n</think>\n\n";
 constexpr const char * ENABLED_THINKING_SUFFIX = "<think>\n";
 constexpr const char * THINKING_OPEN_TAG = "<think>";
 constexpr const char * THINKING_CLOSE_TAG = "</think>";
+constexpr const char * FORCED_THINKING_CLOSE = "\n</think>\n\n";
 
 llama_model * g_model = nullptr;
 llama_context * g_context = nullptr;
@@ -68,6 +71,8 @@ std::string g_accelerator_description;
 std::string g_compute_backend = "CPU";
 bool g_gpu_enabled = false;
 bool g_turn_thinking_enabled = false;
+bool g_turn_thinking_closed = false;
+int g_turn_generated_tokens = 0;
 ggml_backend_dev_t g_gpu_device = nullptr;
 
 std::string find_gpu_device() {
@@ -113,6 +118,8 @@ void android_log_callback(ggml_log_level level, const char * text, void *) {
 void reset_short_term_state() {
     g_stop_position = 0;
     g_turn_thinking_enabled = false;
+    g_turn_thinking_closed = false;
+    g_turn_generated_tokens = 0;
     g_cached_token_chars.clear();
     g_assistant.str("");
     g_assistant.clear();
@@ -166,6 +173,17 @@ bool enable_thinking_in_generation_prompt(std::string & prompt) {
             disabled_suffix.size(),
             ENABLED_THINKING_SUFFIX);
     return true;
+}
+
+bool ends_with_partial_thinking_close(const std::string & text) {
+    const std::string close_tag(THINKING_CLOSE_TAG);
+    const size_t maximum_prefix = std::min(text.size(), close_tag.size() - 1);
+    for (size_t length = maximum_prefix; length > 0; --length) {
+        if (text.compare(text.size() - length, length, close_tag, 0, length) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void finish_assistant_message() {
@@ -290,37 +308,136 @@ int process_system_prompt(const std::string & prompt) {
     return 0;
 }
 
-bool is_valid_utf8(const char * string) {
-    if (string == nullptr) {
-        return true;
-    }
+struct Utf8Conversion {
+    bool complete = true;
+    bool replaced_invalid_byte = false;
+    std::vector<jchar> utf16;
+    std::string normalized_utf8;
+};
 
-    const auto * bytes = (const unsigned char *) string;
-    int num = 0;
+Utf8Conversion convert_utf8(const std::string & input) {
+    Utf8Conversion result;
+    result.utf16.reserve(input.size());
+    result.normalized_utf8.reserve(input.size());
 
-    while (*bytes != 0x00) {
-        if ((*bytes & 0x80) == 0x00) {
-            num = 1;
-        } else if ((*bytes & 0xE0) == 0xC0) {
-            num = 2;
-        } else if ((*bytes & 0xF0) == 0xE0) {
-            num = 3;
-        } else if ((*bytes & 0xF8) == 0xF0) {
-            num = 4;
+    const auto * bytes = reinterpret_cast<const uint8_t *>(input.data());
+    size_t index = 0;
+    while (index < input.size()) {
+        const uint8_t lead = bytes[index];
+        uint32_t code_point = 0;
+        size_t length = 0;
+
+        if (lead <= 0x7f) {
+            code_point = lead;
+            length = 1;
+        } else if (lead >= 0xc2 && lead <= 0xdf) {
+            code_point = lead & 0x1f;
+            length = 2;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            code_point = lead & 0x0f;
+            length = 3;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            code_point = lead & 0x07;
+            length = 4;
+        }
+
+        if (length > 1 && input.size() - index < length) {
+            result.complete = false;
+            return result;
+        }
+
+        bool valid = length != 0;
+        for (size_t offset = 1; valid && offset < length; ++offset) {
+            const uint8_t continuation = bytes[index + offset];
+            valid = (continuation & 0xc0) == 0x80;
+            code_point = (code_point << 6) | (continuation & 0x3f);
+        }
+        if (valid && length == 3) {
+            valid = code_point >= 0x800 && !(code_point >= 0xd800 && code_point <= 0xdfff);
+        } else if (valid && length == 4) {
+            valid = code_point >= 0x10000 && code_point <= 0x10ffff;
+        }
+
+        if (!valid) {
+            result.replaced_invalid_byte = true;
+            result.utf16.push_back(static_cast<jchar>(0xfffd));
+            result.normalized_utf8.append("\xef\xbf\xbd");
+            ++index;
+            continue;
+        }
+
+        result.normalized_utf8.append(input, index, length);
+        if (code_point <= 0xffff) {
+            result.utf16.push_back(static_cast<jchar>(code_point));
         } else {
-            return false;
+            code_point -= 0x10000;
+            result.utf16.push_back(static_cast<jchar>(0xd800 + (code_point >> 10)));
+            result.utf16.push_back(static_cast<jchar>(0xdc00 + (code_point & 0x3ff)));
         }
-
-        bytes += 1;
-        for (int i = 1; i < num; ++i) {
-            if ((*bytes & 0xC0) != 0x80) {
-                return false;
-            }
-            bytes += 1;
-        }
+        index += length;
     }
 
-    return true;
+    return result;
+}
+
+jstring new_java_string(JNIEnv * env, const std::vector<jchar> & utf16) {
+    static constexpr jchar EMPTY = 0;
+    const jchar * chars = utf16.empty() ? &EMPTY : utf16.data();
+    return env->NewString(chars, static_cast<jsize>(utf16.size()));
+}
+
+void append_utf8(std::string & output, uint32_t code_point) {
+    if (code_point <= 0x7f) {
+        output.push_back(static_cast<char>(code_point));
+    } else if (code_point <= 0x7ff) {
+        output.push_back(static_cast<char>(0xc0 | (code_point >> 6)));
+        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else if (code_point <= 0xffff) {
+        output.push_back(static_cast<char>(0xe0 | (code_point >> 12)));
+        output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else {
+        output.push_back(static_cast<char>(0xf0 | (code_point >> 18)));
+        output.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    }
+}
+
+std::string java_string_to_utf8(JNIEnv * env, jstring input) {
+    if (input == nullptr) {
+        return {};
+    }
+
+    const jsize length = env->GetStringLength(input);
+    const jchar * chars = env->GetStringChars(input, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+
+    std::string result;
+    result.reserve(static_cast<size_t>(length) * 2);
+    for (jsize index = 0; index < length; ++index) {
+        uint32_t code_point = chars[index];
+        if (code_point >= 0xd800 && code_point <= 0xdbff) {
+            if (index + 1 < length) {
+                const uint32_t low = chars[index + 1];
+                if (low >= 0xdc00 && low <= 0xdfff) {
+                    code_point = 0x10000 + ((code_point - 0xd800) << 10) + (low - 0xdc00);
+                    ++index;
+                } else {
+                    code_point = 0xfffd;
+                }
+            } else {
+                code_point = 0xfffd;
+            }
+        } else if (code_point >= 0xdc00 && code_point <= 0xdfff) {
+            code_point = 0xfffd;
+        }
+        append_utf8(result, code_point);
+    }
+    env->ReleaseStringChars(input, chars);
+    return result;
 }
 
 void unload_runtime() {
@@ -450,9 +567,10 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeLoad(
     g_chat_templates = common_chat_templates_init(g_model, "");
 
     common_params_sampling sampling_params;
-    sampling_params.temp = 0.5f;
+    sampling_params.seed = 42;
+    sampling_params.temp = 0.2f;
     sampling_params.top_k = 20;
-    sampling_params.top_p = 0.9f;
+    sampling_params.top_p = 0.85f;
     sampling_params.min_p = 0.0f;
     g_sampler = common_sampler_init(g_model, sampling_params);
     if (g_sampler == nullptr) {
@@ -471,9 +589,7 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeSetSystemPrompt(
         JNIEnv * env,
         jobject,
         jstring prompt) {
-    const char * prompt_chars = env->GetStringUTFChars(prompt, nullptr);
-    const std::string prompt_string(prompt_chars);
-    env->ReleaseStringUTFChars(prompt, prompt_chars);
+    const std::string prompt_string = java_string_to_utf8(env, prompt);
     return process_system_prompt(prompt_string);
 }
 
@@ -494,9 +610,7 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativePreparePrompt(
     common_sampler_reset(g_sampler);
     llama_perf_context_reset(g_context);
 
-    const char * prompt_chars = env->GetStringUTFChars(prompt, nullptr);
-    const std::string prompt_string(prompt_chars);
-    env->ReleaseStringUTFChars(prompt, prompt_chars);
+    const std::string prompt_string = java_string_to_utf8(env, prompt);
 
     std::string formatted_prompt = prompt_string;
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
@@ -556,6 +670,36 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeNextToken(JNIEnv * env, jobje
         return nullptr;
     }
 
+    if (g_turn_thinking_enabled &&
+        !g_turn_thinking_closed &&
+        g_turn_generated_tokens >= THINKING_TOKEN_BUDGET &&
+        g_cached_token_chars.empty() &&
+        !ends_with_partial_thinking_close(g_assistant.str())) {
+        const std::string closing_text(FORCED_THINKING_CLOSE);
+        const llama_tokens closing_tokens = common_tokenize(g_context, closing_text, false, false);
+        if (closing_tokens.empty() || !ensure_context_capacity((int) closing_tokens.size())) {
+            finish_assistant_message();
+            throw_illegal_state(env, "Could not reserve space for the final answer");
+            return nullptr;
+        }
+        for (const llama_token token : closing_tokens) {
+            common_sampler_accept(g_sampler, token, true);
+        }
+        if (decode_tokens(closing_tokens, g_current_position, true) != 0) {
+            finish_assistant_message();
+            throw_illegal_state(env, "Could not close the reasoning section");
+            return nullptr;
+        }
+        g_current_position += (llama_pos) closing_tokens.size();
+        g_assistant << closing_text;
+        g_turn_thinking_closed = true;
+        LOGI("closed reasoning after %d generated tokens to preserve final-answer budget",
+             g_turn_generated_tokens);
+
+        const Utf8Conversion conversion = convert_utf8(closing_text);
+        return new_java_string(env, conversion.utf16);
+    }
+
     const llama_token new_token_id = common_sampler_sample(g_sampler, g_context, -1);
     common_sampler_accept(g_sampler, new_token_id, true);
 
@@ -568,6 +712,7 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeNextToken(JNIEnv * env, jobje
         return nullptr;
     }
     g_current_position++;
+    g_turn_generated_tokens++;
 
     if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
         finish_assistant_message();
@@ -577,12 +722,20 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeNextToken(JNIEnv * env, jobje
     const std::string token_chars = common_token_to_piece(g_context, new_token_id);
     g_cached_token_chars += token_chars;
 
-    if (!is_valid_utf8(g_cached_token_chars.c_str())) {
+    const Utf8Conversion conversion = convert_utf8(g_cached_token_chars);
+    if (!conversion.complete) {
         return env->NewStringUTF("");
     }
+    if (conversion.replaced_invalid_byte) {
+        LOGW("replaced invalid UTF-8 byte in generated output");
+    }
 
-    jstring result = env->NewStringUTF(g_cached_token_chars.c_str());
-    g_assistant << g_cached_token_chars;
+    jstring result = new_java_string(env, conversion.utf16);
+    g_assistant << conversion.normalized_utf8;
+    if (g_turn_thinking_enabled && !g_turn_thinking_closed) {
+        g_turn_thinking_closed =
+                g_assistant.str().find(THINKING_CLOSE_TAG) != std::string::npos;
+    }
     g_cached_token_chars.clear();
     return result;
 }

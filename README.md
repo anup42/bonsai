@@ -7,7 +7,7 @@ An offline Android demo for PrismML's end-to-end 1-bit Bonsai 8B model. The app 
 - Hybrid ARM64 CPU + Vulkan inference with safe CPU fallback
 - Streaming chat with generated-token count and llama.cpp generation throughput
 - Optional **Thinking** mode with reasoning and final answer displayed separately
-- 160-token direct turns and 320-token thinking turns
+- 160-token direct turns and 512-token thinking turns with a reserved final-answer budget
 - Direct, resumable download from the official PrismML Hugging Face repository
 - Local GGUF import through Android's document picker
 - Published SHA-256 verification before a downloaded or imported model is used

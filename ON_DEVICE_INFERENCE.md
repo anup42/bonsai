@@ -93,11 +93,11 @@ The stable policy therefore offloads only the Q1 output projection and retains t
 
 ## Performance expectations
 
-One verified thinking-mode run on a Galaxy `SM-F966B` running Android 16 with an Adreno 830 generated 137 tokens at approximately **4.09 tokens/second**, displayed 380 characters of model-generated reasoning, and returned the correct final answer `42` for `17 + 25`. Treat this as evidence that this exact APK/model/device combination worked, not as a general benchmark.
+One verified thinking-mode run on a Galaxy `SM-F966B` running Android 16 with an Adreno 830 evaluated 278 generated tokens at approximately **4.23 tokens/second**, displayed 814 characters of model-generated reasoning, and returned the correct final answer `42` for `17 + 25`. Treat this as evidence that this exact APK/model/device combination worked, not as a general benchmark.
 
 Hybrid GPU use does **not** guarantee a speedup. Moving only the output projection introduces CPU/GPU synchronization and transfer overhead, and the optimized ARM-only route can be faster for this workload. Performance also varies with prompt length, context occupancy, thermal state, power mode, driver version, and sampling behavior.
 
-The sampler currently uses temperature `0.5`, top-k `20`, and top-p `0.9`. Direct UI turns and the automatic demo allow 160 generated tokens. Thinking turns allow 320 because reasoning consumes part of the budget. The engine clamps all callers to a maximum of 512.
+The sampler uses a fixed seed of `42`, temperature `0.2`, top-k `20`, and top-p `0.85` to make this heavily quantized demo less variable and easier to verify. Direct UI turns and the automatic demo allow 160 generated tokens. Thinking turns allow the engine maximum of 512 tokens; the native runtime limits an open reasoning section to 256 generated tokens so the remaining budget is available for the final answer.
 
 ## Thinking and visible reasoning
 
@@ -108,7 +108,7 @@ Thinking is an optional, persistent UI setting and is off by default. Each turn 
 
 The streaming parser handles a prefilled opening marker, an explicitly emitted marker, and tag boundaries split across tokens. It sends reasoning to a separate tinted **On-device reasoning** panel and the answer to the normal assistant body. Conversation history also stores the two fields separately so subsequent chat-template formatting remains valid.
 
-Thinking mode uses the same model, sampler, context, and hybrid CPU/Vulkan backend. It changes prompt formatting and raises the per-turn generation allowance from 160 to 320 tokens; it does not enable a second inference engine or add GPU layers. The displayed text is model-generated reasoning, may be incomplete at the token limit, and should not be treated as a guarantee that the answer is correct. If the pinned model's template no longer matches the expected suffix, the native layer fails explicitly instead of silently using the wrong response mode.
+Thinking mode uses the same model, sampler, context, and hybrid CPU/Vulkan backend. It changes prompt formatting and raises the per-turn generation allowance from 160 to 512 tokens; it does not enable a second inference engine or add GPU layers. If the model has not emitted `</think>` after 256 generated tokens, the native runtime decodes that closing marker into the same model context and lets the model generate the final answer from the remaining budget. The displayed reasoning is still model-generated and should not be treated as a guarantee that the answer is correct. If the pinned model's template no longer matches the expected suffix, the native layer fails explicitly instead of silently using the wrong response mode.
 
 ## Build and install
 
@@ -196,7 +196,7 @@ Direct turns log `thinking=disabled max_tokens=160` and normally report `reasoni
 
 ### Generation returns no visible answer
 
-With thinking enabled, the model may reach the 320-token limit before closing `</think>` or producing a final answer. The reasoning panel preserves the text received so far and the UI reports that the final answer was not completed. Retry with a narrower prompt or turn Thinking off for a direct answer.
+With thinking enabled, the runtime reserves final-answer capacity by closing an open reasoning section after 256 generated tokens. A missing answer therefore means the model used the rest of the 512-token turn without completing its final response or native generation failed. Check the filtered logs, retry with a narrower prompt, start a new chat to clear context, or turn Thinking off for a direct answer.
 
 ## Privacy and network behavior
 

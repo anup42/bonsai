@@ -153,7 +153,7 @@ class BonsaiEngine private constructor(
         private const val DEFAULT_MAX_TOKENS = 160
         private const val MAX_GENERATION_TOKENS = 512
         private const val SYSTEM_PROMPT =
-            "You are Bonsai, a concise helpful assistant running privately and entirely on this Android device. Follow the response mode selected by the user. When a thinking section is opened, reason briefly inside it and then provide a concise final answer; otherwise answer directly. In this app, 1-bit refers to neural-network weights, not image pixels."
+            "You are Bonsai, a helpful and concise assistant. Answer accurately and clearly. If a thinking section is opened, keep it brief, double-check factual and numerical claims, close it, and always provide a clear final answer."
 
         @Volatile
         private var instance: BonsaiEngine? = null

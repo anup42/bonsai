@@ -1,4 +1,4 @@
-60854491b04538782aaf83455f3ac9927c4f091f85dced0f5b54052d90ea3679  llama/src/main/prebuilt/arm64-v8a/libbonsai-runtime.so
+cc0618e8121f13d0ac2452c88f609833f29f9e6f9151618cf6ba837d0791957f  llama/src/main/prebuilt/arm64-v8a/libbonsai-runtime.so
 2fb3f2e0f0b4bb8906c8e682ba53ca37772f0bfee3120a271b860b6831080fa5  llama/src/main/prebuilt/arm64-v8a/libggml-base.so
 a100845d1a7e0384b82a62e31520046b6d94bebf85d6c4bc59bc4318e9829b8b  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.0_1.so
 368b42fe4bc6f74c3a3bfe8c9eb62890b0d7d2f1e6d35260a8c341c469275936  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.2_1.so

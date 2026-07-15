@@ -208,7 +208,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupMessages() {
         adapter = MessageAdapter()
-        messagesView.layoutManager = LinearLayoutManager(this)
+        messagesView.layoutManager = LinearLayoutManager(this).apply {
+            stackFromEnd = true
+        }
+        messagesView.itemAnimator = null
         messagesView.adapter = adapter
     }
 
@@ -829,9 +832,12 @@ class MainActivity : AppCompatActivity() {
         reasoning: String? = null,
     ) {
         if (index !in messages.indices) return
+        val keepAtBottom = !messagesView.canScrollVertically(1)
         messages[index] = messages[index].copy(text = text, meta = meta, reasoning = reasoning)
         adapter.submitList(messages.toList()) {
-            messagesView.scrollToPosition(index)
+            if (keepAtBottom && messagesView.canScrollVertically(1)) {
+                messagesView.scrollToPosition(index)
+            }
         }
     }
 
@@ -1013,7 +1019,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_DEMO_DONE = "demo_done"
         private const val PREF_THINKING_ENABLED = "thinking_enabled"
         private const val DIRECT_MAX_TOKENS = 160
-        private const val THINKING_MAX_TOKENS = 320
+        private const val THINKING_MAX_TOKENS = 512
         private const val STATE_IDS = "message_ids"
         private const val STATE_ROLES = "message_roles"
         private const val STATE_TEXTS = "message_texts"
