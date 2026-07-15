@@ -1,0 +1,11 @@
+diff --git a/ggml/src/ggml-vulkan/CMakeLists.txt b/ggml/src/ggml-vulkan/CMakeLists.txt
+index 2d9e857..049a3ee 100644
+--- a/ggml/src/ggml-vulkan/CMakeLists.txt
++++ b/ggml/src/ggml-vulkan/CMakeLists.txt
+@@ -155,4 +155,6 @@ if (Vulkan_FOUND)
+     if (CMAKE_CROSSCOMPILING)
++        file(TO_CMAKE_PATH "${CMAKE_MAKE_PROGRAM}" HOST_CMAKE_MAKE_PROGRAM)
+         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
++        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_MAKE_PROGRAM=${HOST_CMAKE_MAKE_PROGRAM})
+         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+     endif()

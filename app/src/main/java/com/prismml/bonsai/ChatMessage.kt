@@ -1,0 +1,9 @@
+package com.prismml.bonsai
+
+data class ChatMessage(
+    val id: Long,
+    val role: String,
+    val text: String,
+    val meta: String? = null,
+    val reasoning: String? = null,
+)

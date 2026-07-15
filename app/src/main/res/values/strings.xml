@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Bonsai</string>
+    <string name="toolbar_subtitle">1-bit · private · on device</string>
+    <string name="local_badge">1b</string>
+    <string name="status_model_missing">Add the Bonsai model</string>
+    <string name="detail_model_missing">Download or import the official 1-bit GGUF to begin.</string>
+    <string name="status_model_found">Bonsai 8B is on device</string>
+    <string name="detail_model_found">Q1_0 · %1$s · %2$s</string>
+    <string name="status_connecting">Connecting securely</string>
+    <string name="status_downloading">Downloading Bonsai 8B</string>
+    <string name="status_importing">Importing Bonsai 8B</string>
+    <string name="status_loading">Loading the 1-bit model</string>
+    <string name="status_ready">Ready for local inference</string>
+    <string name="status_generating">Thinking on this device</string>
+    <string name="status_reasoning">Reasoning on this device</string>
+    <string name="status_error">Couldn’t complete that action</string>
+    <string name="progress_idle">The model needs about 1.08 GiB of storage</string>
+    <string name="progress_ready">Offline · %1$s via llama.cpp</string>
+    <string name="progress_connecting">Preparing the resumable model download…</string>
+    <string name="progress_importing">Copying the selected model into private storage…</string>
+    <string name="progress_download">%1$s of %2$s</string>
+    <string name="progress_import">%1$s of %2$s copied</string>
+    <string name="action_download">Download model</string>
+    <string name="action_import">Import file</string>
+    <string name="action_send">Send</string>
+    <string name="action_new_chat">New chat</string>
+    <string name="chat_title">On-device chat</string>
+    <string name="chat_privacy">Prompts and responses stay on this phone</string>
+    <string name="thinking_mode_title">Thinking</string>
+    <string name="thinking_mode_summary_off">Experimental reasoning is off</string>
+    <string name="thinking_mode_summary_on">Experimental reasoning will be shown</string>
+    <string name="thinking_mode_description">Enable experimental thinking mode</string>
+    <string name="reasoning_label">On-device reasoning</string>
+    <string name="chat_empty">Choose a suggestion or ask Bonsai anything. No cloud connection is used for inference.</string>
+    <string name="suggestion_one">Why 1-bit?</string>
+    <string name="suggestion_two">Kotlin example</string>
+    <string name="suggestion_three">Demo ideas</string>
+    <string name="prompt_hint">Message Bonsai locally</string>
+    <string name="response_waiting">Generating…</string>
+    <string name="response_waiting_thinking">Waiting for the final answer…</string>
+    <string name="response_reasoning_incomplete">The model reached the token limit before producing a final answer.</string>
+    <string name="response_failed">The response could not be generated.</string>
+    <plurals name="response_meta">
+        <item quantity="one">%1$d token · %2$.2f tok/s</item>
+        <item quantity="other">%1$d tokens · %2$.2f tok/s</item>
+    </plurals>
+    <string name="error_download">Download failed: %1$s</string>
+    <string name="error_import">Import failed: %1$s</string>
+    <string name="error_model_load">Model load failed: %1$s</string>
+    <string name="error_inference">Inference failed: %1$s</string>
+    <string name="error_reset">Couldn’t start a new chat: %1$s</string>
+</resources>

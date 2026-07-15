@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="surface">#101512</color>
+    <color name="status_surface">#18251D</color>
+    <color name="status_outline">#2B4333</color>
+    <color name="composer_surface">#18201B</color>
+    <color name="assistant_message_surface">#1A221D</color>
+    <color name="reasoning_surface">#142019</color>
+    <color name="reasoning_outline">#304638</color>
+    <color name="user_message_surface">#1E3B2C</color>
+    <color name="chip_surface">#252E28</color>
+    <color name="on_surface">#E4ECE5</color>
+    <color name="on_surface_variant">#AAB6AD</color>
+    <color name="on_user_message">#A8E4C2</color>
+    <color name="accent">#5EC993</color>
+    <color name="accent_dark">#3FAF78</color>
+    <color name="on_accent">#062A1A</color>
+    <color name="outline">#3B4940</color>
+</resources>

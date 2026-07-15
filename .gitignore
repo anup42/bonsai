@@ -1,0 +1,16 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+.cxx/
+local.properties
+.models/
+.reference/
+.tools/
+android-diagnostics/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+keystore.properties
