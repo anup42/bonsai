@@ -27,17 +27,24 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.prismml.bonsai.runtime.BonsaiEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -46,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private val messages = mutableListOf<ChatMessage>()
     private var nextMessageId = 1L
     private var isBusy = false
+    private var modelLoadFailed = false
     private var verificationRequest: VerificationRequest? = null
 
     private lateinit var statusText: TextView
@@ -58,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var newChatButton: MaterialButton
     private lateinit var thinkingSwitch: SwitchMaterial
     private lateinit var thinkingSummary: TextView
+    private lateinit var chipGroup: ChipGroup
     private lateinit var emptyState: TextView
     private lateinit var promptInput: EditText
     private lateinit var sendButton: MaterialButton
@@ -67,14 +76,27 @@ class MainActivity : AppCompatActivity() {
         if (uri != null) {
             lifecycleScope.launch {
                 setBusy(true)
+                progressBar.isIndeterminate = true
                 statusText.text = getString(R.string.status_importing)
                 progressLabel.text = getString(R.string.progress_importing)
                 try {
-                    loadAndRunDemo(importModel(uri), runDemo = true)
+                    val model = try {
+                        importModel(uri)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        showError(getString(R.string.error_import, error.userMessage()))
+                        return@launch
+                    }
+                    try {
+                        loadAndRunDemo(model, runDemo = true)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        showModelLoadError(error)
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (error: Throwable) {
-                    showError(getString(R.string.error_import, error.userMessage()))
                 } finally {
                     setBusy(false)
                 }
@@ -124,7 +146,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Throwable) {
-                    showError(getString(R.string.error_model_load, error.userMessage()))
+                    showModelLoadError(error)
                 } finally {
                     setBusy(false)
                 }
@@ -156,6 +178,7 @@ class MainActivity : AppCompatActivity() {
         newChatButton = findViewById(R.id.newChatButton)
         thinkingSwitch = findViewById(R.id.thinkingSwitch)
         thinkingSummary = findViewById(R.id.thinkingSummary)
+        chipGroup = findViewById(R.id.chipGroup)
         emptyState = findViewById(R.id.emptyState)
         promptInput = findViewById(R.id.promptInput)
         sendButton = findViewById(R.id.sendButton)
@@ -213,7 +236,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupPromptChips() {
-        val chipGroup = findViewById<ChipGroup>(R.id.chipGroup)
         listOf(
             getString(R.string.suggestion_one) to
                 "Explain why 1-bit language-model weights are useful on phones.",
@@ -249,22 +271,7 @@ class MainActivity : AppCompatActivity() {
             updateThinkingSummary()
         }
 
-        downloadButton.setOnClickListener {
-            lifecycleScope.launch {
-                setBusy(true)
-                statusText.text = getString(R.string.status_connecting)
-                progressLabel.text = getString(R.string.progress_connecting)
-                try {
-                    loadAndRunDemo(downloadModel(), runDemo = true)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Throwable) {
-                    showError(getString(R.string.error_download, error.userMessage()))
-                } finally {
-                    setBusy(false)
-                }
-            }
-        }
+        downloadButton.setOnClickListener { showDownloadConfirmation() }
 
         importButton.setOnClickListener {
             modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
@@ -285,6 +292,75 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showDownloadConfirmation() {
+        if (isBusy) return
+        val partialBytes = partialDownloadBytes()
+        val isResume = partialBytes > 0L
+        val isCompletePartial = partialBytes == MODEL_BYTES
+        val title = when {
+            isCompletePartial -> R.string.download_dialog_title_verify
+            isResume -> R.string.download_dialog_title_resume
+            else -> R.string.download_dialog_title
+        }
+        val message = when {
+            isCompletePartial -> getString(R.string.download_dialog_message_verify)
+            isResume -> getString(
+                R.string.download_dialog_message_resume,
+                formatBytes(partialBytes),
+                formatBytes(MODEL_BYTES),
+                formatBytes(MODEL_BYTES - partialBytes),
+            )
+            else -> getString(R.string.download_dialog_message, formatBytes(MODEL_BYTES))
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(
+                when {
+                    isCompletePartial -> R.string.action_verify
+                    isResume -> R.string.action_resume
+                    else -> R.string.action_download_confirm
+                },
+            ) { _, _ -> startModelDownload() }
+        if (isResume) {
+            dialog.setNeutralButton(R.string.action_restart_download) { _, _ ->
+                startModelDownload(restart = true)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun startModelDownload(restart: Boolean = false) {
+        lifecycleScope.launch {
+            setBusy(true)
+            progressBar.isIndeterminate = true
+            statusText.text = getString(R.string.status_connecting)
+            progressLabel.text = getString(R.string.progress_connecting)
+            try {
+                val model = try {
+                    downloadModel(restart)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    showError(getString(R.string.error_download, error.userMessage()))
+                    updateDownloadAction()
+                    return@launch
+                }
+                try {
+                    loadAndRunDemo(model, runDemo = true)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    showModelLoadError(error)
+                }
+            } finally {
+                setBusy(false)
+            }
+        }
+    }
+
     private fun submitPrompt() {
         val prompt = promptInput.text.toString().trim()
         if (prompt.isEmpty() || isBusy || engine.state != BonsaiEngine.State.MODEL_READY) return
@@ -297,10 +373,29 @@ class MainActivity : AppCompatActivity() {
         val model = candidateModelFile()
         modelActions.isVisible = model == null
         if (model == null) {
-            statusText.text = getString(R.string.status_model_missing)
-            detailText.text = getString(R.string.detail_model_missing)
-            progressLabel.text = getString(R.string.progress_idle)
+            val partialBytes = partialDownloadBytes()
+            if (partialBytes > 0L) {
+                statusText.text = getString(R.string.status_model_partial)
+                detailText.text = getString(
+                    R.string.detail_model_partial,
+                    formatBytes(partialBytes),
+                    formatBytes(MODEL_BYTES),
+                )
+                progressLabel.text = getString(
+                    if (partialBytes == MODEL_BYTES) {
+                        R.string.progress_partial_complete
+                    } else {
+                        R.string.progress_partial
+                    },
+                )
+            } else {
+                statusText.text = getString(R.string.status_model_missing)
+                detailText.text = getString(R.string.detail_model_missing)
+                progressLabel.text = getString(R.string.progress_idle)
+            }
+            updateDownloadAction()
         } else {
+            downloadButton.setText(R.string.action_download)
             statusText.text = getString(R.string.status_model_found)
             detailText.text = getString(
                 R.string.detail_model_found,
@@ -309,33 +404,89 @@ class MainActivity : AppCompatActivity() {
             )
             progressLabel.text = getString(R.string.progress_ready, engine.activeBackend)
         }
+        updateEmptyState()
     }
 
-    private suspend fun downloadModel(): File = withContext(Dispatchers.IO) {
+    private suspend fun downloadModel(restart: Boolean): File =
+        modelAcquisitionMutex.withLock { downloadModelLocked(restart) }
+
+    private suspend fun downloadModelLocked(restart: Boolean): File = withContext(Dispatchers.IO) {
         val target = internalModelFile()
         target.parentFile?.mkdirs()
-        val partial = File(target.parentFile, "$MODEL_NAME.part")
-        if (partial.length() > MODEL_BYTES) partial.delete()
+        val partial = partialModelFile()
+        if (restart) deletePartialFile(partial)
+        if (partial.length() > MODEL_BYTES) deletePartialFile(partial)
+
+        if (partial.isFile && partial.length() == MODEL_BYTES) {
+            try {
+                showVerifyingModel()
+                validateModelFile(partial)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: IllegalArgumentException) {
+                deletePartialFile(partial)
+            }
+            if (partial.isFile) {
+                replaceModelFile(partial, target)
+                return@withContext target
+            }
+        }
+
         var downloaded = if (partial.isFile) partial.length() else 0L
         ensureFreeSpace(target, MODEL_BYTES - downloaded)
 
-        val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30_000
-            readTimeout = 30_000
-            instanceFollowRedirects = true
-            setRequestProperty("Accept-Encoding", "identity")
-            if (downloaded > 0) setRequestProperty("Range", "bytes=$downloaded-")
-        }
-
+        var connection = openModelDownloadConnection(downloaded)
         try {
-            val responseCode = connection.responseCode
+            var responseCode: Int
+            while (true) {
+                responseCode = connection.responseCode
+                check(connection.url.protocol.equals("https", ignoreCase = true)) {
+                    "The model download was redirected to an insecure connection"
+                }
+                val invalidResume = downloaded > 0L && (
+                    responseCode == HTTP_RANGE_NOT_SATISFIABLE ||
+                        responseCode == HttpURLConnection.HTTP_PARTIAL &&
+                        !ModelDownloadProtocol.isExpectedContentRange(
+                            connection.getHeaderField("Content-Range"),
+                            downloaded,
+                            MODEL_BYTES,
+                        )
+                    )
+                if (!invalidResume) break
+
+                connection.disconnect()
+                deletePartialFile(partial)
+                downloaded = 0L
+                ensureFreeSpace(target, MODEL_BYTES)
+                connection = openModelDownloadConnection(downloaded)
+            }
+
             if (responseCode !in listOf(HttpURLConnection.HTTP_OK, HttpURLConnection.HTTP_PARTIAL)) {
                 throw IllegalStateException("Server returned HTTP $responseCode")
             }
             if (responseCode == HttpURLConnection.HTTP_OK && downloaded > 0) {
-                partial.delete()
+                deletePartialFile(partial)
                 downloaded = 0L
                 ensureFreeSpace(target, MODEL_BYTES)
+            }
+            if (
+                responseCode == HttpURLConnection.HTTP_PARTIAL &&
+                !ModelDownloadProtocol.isExpectedContentRange(
+                    connection.getHeaderField("Content-Range"),
+                    downloaded,
+                    MODEL_BYTES,
+                )
+            ) {
+                throw IllegalStateException("Server returned an unexpected download range")
+            }
+
+            val expectedResponseBytes = MODEL_BYTES - downloaded
+            val declaredResponseBytes = connection.contentLengthLong
+            if (declaredResponseBytes >= 0L && declaredResponseBytes != expectedResponseBytes) {
+                throw IllegalStateException(
+                    "Server returned ${formatBytes(declaredResponseBytes)}; " +
+                        "expected ${formatBytes(expectedResponseBytes)}",
+                )
             }
 
             withContext(Dispatchers.Main) {
@@ -353,6 +504,9 @@ class MainActivity : AppCompatActivity() {
                     while (true) {
                         val read = input.read(buffer)
                         if (read == -1) break
+                        if (read.toLong() > MODEL_BYTES - downloaded) {
+                            throw IllegalStateException("Server sent more data than the expected model size")
+                        }
                         output.write(buffer, 0, read)
                         downloaded += read
                         if (downloaded - lastUiUpdate >= PROGRESS_UPDATE_BYTES) {
@@ -367,9 +521,43 @@ class MainActivity : AppCompatActivity() {
             connection.disconnect()
         }
 
-        validateModelFile(partial)
+        updateDownloadProgress(downloaded)
+        if (downloaded != MODEL_BYTES) {
+            throw IllegalStateException(
+                "Download stopped at ${formatBytes(downloaded)}; tap Resume download to continue",
+            )
+        }
+        showVerifyingModel()
+        try {
+            validateModelFile(partial)
+        } catch (error: IllegalArgumentException) {
+            deletePartialFile(partial)
+            throw error
+        }
         replaceModelFile(partial, target)
         target
+    }
+
+    private fun openModelDownloadConnection(offset: Long): HttpURLConnection {
+        return (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+            setRequestProperty("Accept-Encoding", "identity")
+            if (offset > 0L) setRequestProperty("Range", "bytes=$offset-")
+        }
+    }
+
+    private fun deletePartialFile(file: File) {
+        if (file.exists() && !file.delete()) {
+            throw IllegalStateException("The incomplete model download could not be reset")
+        }
+    }
+
+    private suspend fun showVerifyingModel() = withContext(Dispatchers.Main) {
+        progressBar.isIndeterminate = true
+        statusText.text = getString(R.string.status_verifying)
+        progressLabel.text = getString(R.string.progress_verifying)
     }
 
     private suspend fun updateDownloadProgress(bytes: Long) = withContext(Dispatchers.Main) {
@@ -382,39 +570,47 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private suspend fun importModel(uri: Uri): File = withContext(Dispatchers.IO) {
+    private suspend fun importModel(uri: Uri): File =
+        modelAcquisitionMutex.withLock { importModelLocked(uri) }
+
+    private suspend fun importModelLocked(uri: Uri): File = withContext(Dispatchers.IO) {
         val target = internalModelFile()
         target.parentFile?.mkdirs()
         ensureFreeSpace(target, MODEL_BYTES)
         val partial = File(target.parentFile, "$MODEL_NAME.import")
 
-        contentResolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "The selected file could not be opened" }
-            FileOutputStream(partial, false).use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copied = 0L
-                var lastUiUpdate = 0L
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    output.write(buffer, 0, read)
-                    copied += read
-                    if (copied - lastUiUpdate >= PROGRESS_UPDATE_BYTES) {
-                        lastUiUpdate = copied
-                        withContext(Dispatchers.Main) {
-                            progressLabel.text = getString(
-                                R.string.progress_import,
-                                formatBytes(copied),
-                                formatBytes(MODEL_BYTES),
+        try {
+            contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "The selected file could not be opened" }
+                FileOutputStream(partial, false).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var copied = 0L
+                    var lastUiUpdate = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        if (read.toLong() > MODEL_BYTES - copied) {
+                            throw IllegalArgumentException(
+                                "The selected file is larger than the official Bonsai model",
                             )
                         }
+                        output.write(buffer, 0, read)
+                        copied += read
+                        if (copied - lastUiUpdate >= PROGRESS_UPDATE_BYTES) {
+                            lastUiUpdate = copied
+                            withContext(Dispatchers.Main) {
+                                progressLabel.text = getString(
+                                    R.string.progress_import,
+                                    formatBytes(copied),
+                                    formatBytes(MODEL_BYTES),
+                                )
+                            }
+                        }
                     }
+                    output.fd.sync()
                 }
-                output.fd.sync()
             }
-        }
-
-        try {
+            showVerifyingModel()
             validateModelFile(partial)
         } catch (error: Throwable) {
             partial.delete()
@@ -434,6 +630,7 @@ class MainActivity : AppCompatActivity() {
             engine.activeBackend,
         )
         engine.loadModel(model)
+        modelLoadFailed = false
         refreshModelState()
         statusText.text = getString(R.string.status_ready)
         progressLabel.text = getString(R.string.progress_ready, engine.activeBackend)
@@ -580,7 +777,15 @@ class MainActivity : AppCompatActivity() {
         sendButton.isEnabled = !busy && modelReady
         promptInput.isEnabled = !busy && modelReady
         newChatButton.isEnabled = !busy && modelReady && messages.isNotEmpty()
-        thinkingSwitch.isEnabled = !busy
+        thinkingSwitch.isEnabled = !busy && modelReady
+        for (index in 0 until chipGroup.childCount) {
+            chipGroup.getChildAt(index).isEnabled = !busy && modelReady
+        }
+        promptInput.setHint(
+            if (modelReady) R.string.prompt_hint else R.string.prompt_hint_model_missing,
+        )
+        updateThinkingSummary()
+        updateEmptyState()
         progressBar.isVisible = busy
         if (!busy) progressBar.isIndeterminate = false
     }
@@ -592,6 +797,15 @@ class MainActivity : AppCompatActivity() {
         progressBar.isVisible = false
         setBusy(false)
         Log.e(TAG, message)
+    }
+
+    private fun showModelLoadError(error: Throwable) {
+        modelLoadFailed = true
+        showError(getString(R.string.error_model_load, error.userMessage()))
+        modelActions.isVisible = true
+        downloadButton.setText(R.string.action_replace_download)
+        importButton.setText(R.string.action_replace_import)
+        emptyState.setText(R.string.chat_empty_model_error)
     }
 
     private fun addMessage(
@@ -625,11 +839,39 @@ class MainActivity : AppCompatActivity() {
         emptyState.isVisible = messages.isEmpty()
         newChatButton.isVisible = messages.isNotEmpty()
         if (::engine.isInitialized) {
-            newChatButton.isEnabled = !isBusy && engine.state == BonsaiEngine.State.MODEL_READY
+            val modelReady = engine.state == BonsaiEngine.State.MODEL_READY
+            newChatButton.isEnabled = !isBusy && modelReady
+            if (messages.isEmpty()) {
+                emptyState.setText(
+                    when {
+                        modelLoadFailed -> R.string.chat_empty_model_error
+                        modelReady -> R.string.chat_empty
+                        else -> R.string.chat_empty_model_missing
+                    },
+                )
+            }
         }
     }
 
     private fun internalModelFile() = File(File(filesDir, "models"), MODEL_NAME)
+
+    private fun partialModelFile() = File(internalModelFile().parentFile, "$MODEL_NAME.part")
+
+    private fun partialDownloadBytes(): Long {
+        val partial = partialModelFile()
+        return partial.length().takeIf { partial.isFile && it in 1L..MODEL_BYTES } ?: 0L
+    }
+
+    private fun updateDownloadAction() {
+        downloadButton.setText(
+            when (partialDownloadBytes()) {
+                MODEL_BYTES -> R.string.action_verify_download
+                0L -> R.string.action_download
+                else -> R.string.action_resume
+            },
+        )
+        importButton.setText(R.string.action_import)
+    }
 
     private fun externalModelFile(): File? {
         val root = getExternalFilesDir(null) ?: return null
@@ -657,13 +899,38 @@ class MainActivity : AppCompatActivity() {
             "Model size is ${formatBytes(actualBytes)}; expected ${formatBytes(MODEL_BYTES)}"
         }
         require(isValidModelFile(file)) { "The selected file is not a valid GGUF model" }
+        require(sha256(file).equals(MODEL_SHA256, ignoreCase = true)) {
+            "Model checksum does not match the official Bonsai artifact"
+        }
     }
 
     private fun replaceModelFile(source: File, target: File) {
-        if (target.exists() && !target.delete()) {
-            throw IllegalStateException("The previous model file could not be replaced")
+        target.parentFile?.mkdirs()
+        try {
+            Files.move(
+                source.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
-        check(source.renameTo(target)) { "The model file could not be finalized" }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(HASH_BUFFER_BYTES)
+            while (true) {
+                val read = input.read(buffer)
+                if (read == -1) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
     }
 
     @SuppressLint("UsableSpace")
@@ -684,10 +951,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateThinkingSummary() {
         thinkingSummary.setText(
-            if (thinkingSwitch.isChecked) {
-                R.string.thinking_mode_summary_on
-            } else {
-                R.string.thinking_mode_summary_off
+            when {
+                engine.state != BonsaiEngine.State.MODEL_READY -> {
+                    R.string.thinking_mode_summary_unavailable
+                }
+                thinkingSwitch.isChecked -> R.string.thinking_mode_summary_on
+                else -> R.string.thinking_mode_summary_off
             },
         )
     }
@@ -713,21 +982,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun formatBytes(bytes: Long): String {
-        val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
-        return String.format(Locale.US, "%.2f GiB", gib)
+        return if (bytes >= GIB_BYTES) {
+            String.format(Locale.US, "%.2f GiB", bytes.toDouble() / GIB_BYTES)
+        } else {
+            String.format(Locale.US, "%.0f MiB", bytes.toDouble() / MIB_BYTES)
+        }
     }
 
     private fun Throwable.userMessage(): String = message?.takeIf { it.isNotBlank() }
         ?: javaClass.simpleName
 
     companion object {
+        private val modelAcquisitionMutex = Mutex()
         private const val TAG = "BonsaiDemo"
         private const val MODEL_NAME = "Bonsai-8B-Q1_0.gguf"
         private const val MODEL_BYTES = 1_158_654_496L
+        private const val MODEL_SHA256 =
+            "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54"
+        private const val HASH_BUFFER_BYTES = 1024 * 1024
+        private const val HTTP_RANGE_NOT_SATISFIABLE = 416
+        private const val MIB_BYTES = 1024.0 * 1024.0
+        private const val GIB_BYTES = 1024.0 * 1024.0 * 1024.0
         private const val PROGRESS_UPDATE_BYTES = 4L * 1024L * 1024L
         private const val STORAGE_HEADROOM_BYTES = 64L * 1024L * 1024L
         private const val MODEL_URL =
-            "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B-Q1_0.gguf"
+            "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/" +
+                "48516770dd04643643e9f9019a2a349cf26c5dbd/Bonsai-8B-Q1_0.gguf"
         private const val AUTO_PROMPT =
             "In two short sentences, confirm you are running locally on this Android device and name one benefit of a 1-bit 8B language model."
         private const val PREF_DEMO_DONE = "demo_done"

@@ -54,6 +54,7 @@
                         android:layout_width="40dp"
                         android:layout_height="40dp"
                         android:background="@drawable/bg_local_badge"
+                        android:contentDescription="@string/local_badge_description"
                         android:gravity="center"
                         android:text="@string/local_badge"
                         android:textColor="@color/on_accent"
@@ -71,6 +72,7 @@
                             android:id="@+id/statusText"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:accessibilityLiveRegion="polite"
                             android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle1"
                             android:textColor="@color/on_surface"
                             android:textStyle="bold" />

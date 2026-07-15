@@ -10,6 +10,7 @@ An offline Android demo for PrismML's end-to-end 1-bit Bonsai 8B model. The app 
 - 160-token direct turns and 320-token thinking turns
 - Direct, resumable download from the official PrismML Hugging Face repository
 - Local GGUF import through Android's document picker
+- Published SHA-256 verification before a downloaded or imported model is used
 - A 4,096-token context and an automatic post-load inference check
 - Private app storage with Android backup disabled
 
@@ -35,7 +36,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 adb shell am start -n com.prismml.bonsai/.MainActivity
 ```
 
-The 1.08 GiB model is deliberately not bundled in the APK. On first launch, tap **Download 1-bit model**, or import `Bonsai-8B-Q1_0.gguf` from device storage.
+The 1.08 GiB model is deliberately not bundled in the APK. If it is missing, the app presents **Download 1.08 GiB** and **Import file** actions. Download shows the source and size before starting, stores resumable progress in private app storage, verifies the publisher's SHA-256, then loads the model and runs an automatic local inference check. An interrupted download can be resumed on the next launch.
 
 ## Sources
 

@@ -39,22 +39,24 @@ The app expects exactly this artifact:
 
 - File: `Bonsai-8B-Q1_0.gguf`
 - Size: `1,158,654,496` bytes (about 1.08 GiB as displayed by the app)
-- Source: `https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B-Q1_0.gguf`
+- Source revision: `prism-ml/Bonsai-8B-gguf@48516770dd04643643e9f9019a2a349cf26c5dbd`
 
 `Q1_0` describes the low-bit weight representation. It does not mean that every activation, cache entry, or Android runtime operation is one bit.
 
 The model is not bundled in the APK. The app offers two ways to provide it:
 
-- **Download 1-bit model** downloads the official file directly. Downloads are resumable through a temporary `.part` file.
+- **Download 1.08 GiB** shows a size/source confirmation and downloads the official file directly. Downloads are resumable through a temporary `.part` file.
 - **Import model** uses Android's document picker and copies a user-selected file into app-private storage.
 
-Before replacing the active model, the app checks the exact byte count and the `GGUF` file signature. The final internal location is:
+Before replacing the active model, the app checks the exact byte count, the `GGUF` file signature, and PrismML's published SHA-256 (`284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54`). The hash is checked on the background I/O dispatcher and the UI reports a separate verification phase. The final internal location is:
 
 ```text
 <application files directory>/models/Bonsai-8B-Q1_0.gguf
 ```
 
 The loader can also discover a valid copy under the app-specific external-files directory at `models/Bonsai-8B-Q1_0.gguf`. Keep additional free space available during download or import: the app requires the remaining model bytes plus 64 MiB of headroom.
+
+Resume responses are accepted only when `Content-Range` begins at the saved byte offset and reports the expected total size. If the server ignores a range request or returns HTTP 416, the app safely restarts from the full response; the resume dialog also offers an explicit **Restart** action for other persistent server failures. A process-wide mutex prevents recreated activities from writing the same temporary file concurrently. A complete `.part` file left by an interrupted finalization is verified and promoted without requesting an invalid end-of-file range; invalid complete partials are discarded. Download and import loops are bounded to the published model size, and final replacement uses a same-directory atomic move when the filesystem supports it.
 
 ## CPU and Vulkan execution
 
@@ -141,9 +143,9 @@ The APK supports only `arm64-v8a`, and the app's minimum Android version is API 
 
 ## Using the app
 
-1. Launch the app and choose **Download 1-bit model**, or import the exact official GGUF.
-2. Wait for model loading to finish. The status area reports the selected backend.
-3. On the first successful load, the app runs a short direct-mode inference check.
+1. Launch the app. If no valid model exists, choose **Download 1.08 GiB**, review the size/source confirmation, or import the exact official GGUF.
+2. Keep the app open while it downloads and verifies. If interrupted, relaunch and choose **Resume download**; saved progress is retained.
+3. Wait for model loading to finish. The status area reports the selected backend, and the app runs a short direct-mode inference check after successful acquisition.
 4. Leave **Thinking** off for a direct response, or enable it to stream model-generated reasoning into a separate panel before the final answer.
 5. Enter a prompt or use one of the example prompt chips. Text streams into the assistant message.
 6. Read the generated-token count and generation tokens/second shown under the response.
@@ -183,9 +185,9 @@ Direct turns log `thinking=disabled max_tokens=160` and normally report `reasoni
 
 ### Model download or import fails
 
-- Confirm that the file is exactly `1,158,654,496` bytes and begins with the `GGUF` signature.
+- Confirm that the file is exactly `1,158,654,496` bytes and has SHA-256 `284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54`.
 - Free enough storage for the model, the temporary file, and the app's 64 MiB safety margin.
-- A download can resume from its `.part` file. If a server ignores the range request, the app restarts the download safely.
+- A download can resume from its `.part` file. Ignored ranges and HTTP 416 restart safely; use **Restart** in the resume dialog if another server error persists.
 
 ### Model load fails or the app exits
 
