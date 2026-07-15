@@ -1,0 +1,14 @@
+60854491b04538782aaf83455f3ac9927c4f091f85dced0f5b54052d90ea3679  llama/src/main/prebuilt/arm64-v8a/libbonsai-runtime.so
+2fb3f2e0f0b4bb8906c8e682ba53ca37772f0bfee3120a271b860b6831080fa5  llama/src/main/prebuilt/arm64-v8a/libggml-base.so
+a100845d1a7e0384b82a62e31520046b6d94bebf85d6c4bc59bc4318e9829b8b  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.0_1.so
+368b42fe4bc6f74c3a3bfe8c9eb62890b0d7d2f1e6d35260a8c341c469275936  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.2_1.so
+d32df965d8f4bf6933ed825f89d4980c578241bbea6095da6c222f506de9b320  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.2_2.so
+b9688fa7e329e916cb4959a3a7f7aa8a74f92ae1d1cc1faacb3d5316d109076f  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv8.6_1.so
+e7aa28b96757d9d91c8c725d4ff0c70ff2a26d088cb240028e8aeb6df18f1e78  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv9.0_1.so
+148c984db2b4bc0160716a21df417afde121b40cceb958736ae5a5acf9e3aae4  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv9.2_1.so
+bbeacebd4f15d665aabb8c56c8f7b9ebd29bbbc20e042a406b7c0e1667ec0f85  llama/src/main/prebuilt/arm64-v8a/libggml-cpu-android_armv9.2_2.so
+b5c69a3de7fc71773c6668df0050be3917be1c8963b91f38fb5b0d9783495c88  llama/src/main/prebuilt/arm64-v8a/libggml-vulkan.so
+9a3b813450dd7fae397fd93bfaff42bc49b7b53408ab41778a1b02c73631c515  llama/src/main/prebuilt/arm64-v8a/libggml.so
+0433c3aa5a101d84d0628448e1e08b158a547e39d3174774af76fa2048923490  llama/src/main/prebuilt/arm64-v8a/libllama-common.so
+daec2c09e852c948f20cfe15f492c816d5d09e82bf58f1488c74e9573d26fb8f  llama/src/main/prebuilt/arm64-v8a/libllama.so
+f30aa5c388ff0cc9d6c06962981d024dc52797fadb26e6ef4cd84f5e4bdc4643  llama/src/main/prebuilt/arm64-v8a/libomp.so

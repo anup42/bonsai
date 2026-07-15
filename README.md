@@ -18,16 +18,25 @@ The verified Adreno configuration offloads the output projection (`1/37` model l
 
 ## Build
 
-Requirements: Windows, JDK 17, Android SDK 36, Android NDK `28.2.13676358`, Git, and PowerShell.
+The normal build requires JDK 17 and Android SDK 36. It packages the committed ARM64 runtime libraries, so it does not require Vulkan-Hpp, LLVM-MinGW, the NDK, or native bootstrap tooling.
 
 ```powershell
-git clone --recurse-submodules https://github.com/anup42/bonsai.git
+git clone https://github.com/anup42/bonsai.git
 cd bonsai
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-native.ps1
 .\gradlew.bat :app:assembleDebug
 ```
 
-The bootstrap script initializes the pinned PrismML llama.cpp submodule, applies the tracked Windows Vulkan host-tool patch, and downloads checksum-verified LLVM-MinGW and Vulkan-Hpp dependencies into the ignored `.tools` directory.
+The 14 stripped `arm64-v8a` libraries are tracked under `llama/src/main/prebuilt`. They include the Vulkan backend and CPU fallback; Vulkan-Hpp was used only when compiling them and is not an Android runtime dependency. Their provenance and SHA-256 values are recorded in [llama/PREBUILT_NATIVE.md](llama/PREBUILT_NATIVE.md) and [llama/PREBUILT_NATIVE.sha256](llama/PREBUILT_NATIVE.sha256).
+
+To intentionally rebuild the native runtime from the pinned llama.cpp source, install Android NDK `28.2.13676358`, Git, and PowerShell, then run:
+
+```powershell
+git submodule update --init --recursive
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-native.ps1
+.\gradlew.bat :app:assembleDebug "-Pbonsai.native.buildFromSource=true"
+```
+
+The bootstrap script applies the tracked Windows Vulkan host-tool patch and downloads checksum-verified LLVM-MinGW and Vulkan-Hpp inputs into the ignored `.tools` directory. The property is deliberately explicit so an ordinary Gradle build never enters CMake or looks for those build-time dependencies.
 
 Install on an authorized ARM64 Android device:
 

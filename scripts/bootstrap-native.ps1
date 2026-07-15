@@ -140,4 +140,4 @@ Ensure-ArchiveTool `
     -TargetName "Vulkan-Hpp" `
     -Markers @("vulkan\vulkan.hpp")
 
-Write-Host "Native dependencies are ready. Build with .\gradlew.bat :app:assembleDebug"
+Write-Host 'Native source dependencies are ready. Build with .\gradlew.bat :app:assembleDebug "-Pbonsai.native.buildFromSource=true"'

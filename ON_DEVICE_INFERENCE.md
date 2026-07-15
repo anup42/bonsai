@@ -112,24 +112,23 @@ Thinking mode uses the same model, sampler, context, and hybrid CPU/Vulkan backe
 
 ## Build and install
 
-The current native build is configured for Windows and requires:
-
-- JDK 17
-- Android SDK 36
-- Android NDK `28.2.13676358`
-- An ARM64 Android target (`arm64-v8a`)
-- Git and PowerShell to initialize the pinned PrismML llama.cpp submodule and native host tools
-
-The NDK supplies the Android Vulkan loader, SPIR-V headers, and Windows `glslc`. LLVM-MinGW builds llama.cpp's Windows host-side Vulkan shader generator; the Android runtime libraries themselves are cross-compiled by the NDK.
-
-Prepare the pinned native dependencies, then build the debug APK from the repository root:
+The default build requires JDK 17 and Android SDK 36. Gradle packages 14 committed, stripped `arm64-v8a` libraries from `llama/src/main/prebuilt`, including `libggml-vulkan.so`, all optimized CPU variants, their dependencies, and the Bonsai JNI bridge:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-native.ps1
 .\gradlew.bat :app:assembleDebug
 ```
 
-The bootstrap script is idempotent. It initializes `.vendor/llama.cpp`, applies the tracked `patches/llama-vulkan-host-ninja.patch`, and downloads checksum-verified LLVM-MinGW 20260616 and Vulkan-Hpp 1.3.275 archives into the ignored `.tools` directory. These host-side dependencies are not packaged into the Android app.
+This path does not configure CMake and does not require the Android NDK, Vulkan-Hpp, LLVM-MinGW, or an initialized llama.cpp submodule. Vulkan-Hpp is a header-only C++ build dependency; the installed app uses the compiled `libggml-vulkan.so` and the device's system `libvulkan.so`. See `llama/PREBUILT_NATIVE.md` and `llama/PREBUILT_NATIVE.sha256` for provenance and hashes.
+
+Maintainers can explicitly rebuild the runtime from the pinned PrismML source on Windows:
+
+```powershell
+git submodule update --init --recursive
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-native.ps1
+.\gradlew.bat :app:assembleDebug "-Pbonsai.native.buildFromSource=true"
+```
+
+The source build requires Android NDK `28.2.13676358`. The NDK supplies the Android Vulkan loader, SPIR-V headers, and Windows `glslc`; LLVM-MinGW builds llama.cpp's Windows host-side Vulkan shader generator. The idempotent bootstrap downloads checksum-verified LLVM-MinGW 20260616 and Vulkan-Hpp 1.3.275 into ignored `.tools`, and applies `patches/llama-vulkan-host-ninja.patch`. These host-side inputs are never packaged into the app.
 
 Confirm that adb can see an authorized device, then install and launch:
 
