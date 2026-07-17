@@ -1,4 +1,4 @@
-package com.prismml.bonsai
+package com.samsung.ibit
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

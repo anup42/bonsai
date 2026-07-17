@@ -1,4 +1,4 @@
-package com.prismml.bonsai
+package com.samsung.ibit
 
 import android.view.LayoutInflater
 import android.view.View
@@ -9,20 +9,26 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
+import io.noties.markwon.Markwon
 
-class MessageAdapter : ListAdapter<ChatMessage, MessageAdapter.MessageViewHolder>(DiffCallback) {
+class MessageAdapter(
+    private val markwon: Markwon,
+) : ListAdapter<ChatMessage, MessageAdapter.MessageViewHolder>(DiffCallback) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.item_message, parent, false)
-        return MessageViewHolder(view)
+        return MessageViewHolder(view, markwon)
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         holder.bind(getItem(position))
     }
 
-    class MessageViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+    class MessageViewHolder(
+        itemView: View,
+        private val markwon: Markwon,
+    ) : RecyclerView.ViewHolder(itemView) {
         private val author: TextView = itemView.findViewById(R.id.author)
         private val reasoningPanel: View = itemView.findViewById(R.id.reasoningPanel)
         private val reasoningContent: TextView = itemView.findViewById(R.id.reasoningContent)
@@ -33,9 +39,9 @@ class MessageAdapter : ListAdapter<ChatMessage, MessageAdapter.MessageViewHolder
         fun bind(message: ChatMessage) {
             val isUser = message.role == "You"
             author.text = message.role
-            reasoningContent.text = message.reasoning.orEmpty()
+            setMessageText(reasoningContent, message.reasoning.orEmpty(), message, isUser)
             reasoningPanel.isVisible = !isUser && !message.reasoning.isNullOrBlank()
-            content.text = message.text
+            setMessageText(content, message.text, message, isUser)
             meta.text = message.meta.orEmpty()
             meta.isVisible = !message.meta.isNullOrBlank()
             card.setCardBackgroundColor(
@@ -48,6 +54,19 @@ class MessageAdapter : ListAdapter<ChatMessage, MessageAdapter.MessageViewHolder
                     if (isUser) R.color.on_user_message else R.color.accent,
                 ),
             )
+        }
+
+        private fun setMessageText(
+            view: TextView,
+            text: String,
+            message: ChatMessage,
+            isUser: Boolean,
+        ) {
+            if (isUser || message.isStreaming) {
+                view.text = text
+            } else {
+                markwon.setMarkdown(view, text)
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 # Prebuilt Android native runtime
 
-Normal Bonsai Android builds package the stripped ARM64 libraries in `src/main/prebuilt/arm64-v8a`. This avoids compiling llama.cpp during every app build and means consumers do not need Vulkan-Hpp, LLVM-MinGW, CMake, or the Android NDK.
+Normal iBit Android builds package the stripped ARM64 libraries in `src/main/prebuilt/arm64-v8a`. This avoids compiling llama.cpp during every app build and means consumers do not need Vulkan-Hpp, LLVM-MinGW, CMake, or the Android NDK.
 
 The libraries were produced from:
 

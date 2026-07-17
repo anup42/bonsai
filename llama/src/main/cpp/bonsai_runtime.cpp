@@ -2,11 +2,13 @@
 
 #include <android/log.h>
 #include <jni.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <exception>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -41,12 +43,16 @@ constexpr int CPU_BATCH_SIZE = 256;
 constexpr int HYBRID_GPU_BATCH_SIZE = 1;
 constexpr int OVERFLOW_HEADROOM = 8;
 constexpr int THINKING_TOKEN_BUDGET = 256;
+// Largest model artifact validated with output-projection-only Vulkan offload
+// on the connected Adreno 830. Keep this tied to an exercised GGUF rather than
+// a theoretical memory estimate: driver stability depends on the compute graph.
+constexpr int64_t ADRENO_GPU_MODEL_MAX_BYTES =
+        1074969344LL; // Ternary Bonsai 4B Q2_0
+constexpr const char * UNSTABLE_VULKAN_DEVICE = "Adreno (TM) 830";
 
 constexpr const char * ROLE_SYSTEM = "system";
 constexpr const char * ROLE_USER = "user";
 constexpr const char * ROLE_ASSISTANT = "assistant";
-constexpr const char * DISABLED_THINKING_SUFFIX = "<think>\n\n</think>\n\n";
-constexpr const char * ENABLED_THINKING_SUFFIX = "<think>\n";
 constexpr const char * THINKING_OPEN_TAG = "<think>";
 constexpr const char * THINKING_CLOSE_TAG = "</think>";
 constexpr const char * FORCED_THINKING_CLOSE = "\n</think>\n\n";
@@ -97,6 +103,18 @@ std::string find_gpu_device() {
     return "";
 }
 
+bool is_gpu_offload_blocked() {
+    return g_accelerator_description.find(UNSTABLE_VULKAN_DEVICE) != std::string::npos;
+}
+
+int64_t model_file_size(const char * path) {
+    struct stat file_stat {};
+    if (path == nullptr || stat(path, &file_stat) != 0 || file_stat.st_size < 0) {
+        return -1;
+    }
+    return static_cast<int64_t>(file_stat.st_size);
+}
+
 int android_log_prio_from_ggml(ggml_log_level level) {
     switch (level) {
         case GGML_LOG_LEVEL_ERROR: return ANDROID_LOG_ERROR;
@@ -136,20 +154,6 @@ void reset_chat_state(bool clear_kv = true) {
     }
 }
 
-std::string chat_add_and_format(const std::string & role, const std::string & content) {
-    common_chat_msg message;
-    message.role = role;
-    message.content = content;
-
-    const bool add_assistant_prompt = role == ROLE_USER;
-    std::string formatted = common_chat_format_single(
-            g_chat_templates.get(), g_chat_messages, message, add_assistant_prompt, true);
-    g_chat_messages.push_back(message);
-
-    LOGD("formatted %s message: %s", role.c_str(), formatted.c_str());
-    return formatted;
-}
-
 std::string trim_whitespace(const std::string & value) {
     auto begin = value.begin();
     while (begin != value.end() && std::isspace(static_cast<unsigned char>(*begin))) {
@@ -160,19 +164,6 @@ std::string trim_whitespace(const std::string & value) {
         --end;
     }
     return std::string(begin, end);
-}
-
-bool enable_thinking_in_generation_prompt(std::string & prompt) {
-    const std::string disabled_suffix(DISABLED_THINKING_SUFFIX);
-    if (prompt.size() < disabled_suffix.size() ||
-        prompt.compare(prompt.size() - disabled_suffix.size(), disabled_suffix.size(), disabled_suffix) != 0) {
-        return false;
-    }
-    prompt.replace(
-            prompt.size() - disabled_suffix.size(),
-            disabled_suffix.size(),
-            ENABLED_THINKING_SUFFIX);
-    return true;
 }
 
 bool ends_with_partial_thinking_close(const std::string & text) {
@@ -253,6 +244,26 @@ bool ensure_context_capacity(int incoming_tokens) {
     return true;
 }
 
+int decode_batch(const char * operation) {
+    try {
+        const int decode_result = llama_decode(g_context, g_batch);
+        if (decode_result != 0) {
+            LOGE("llama_decode failed during %s: %d", operation, decode_result);
+            return 1;
+        }
+    } catch (const std::exception & error) {
+        // Vulkan-Hpp reports device loss as vk::DeviceLostError. Never let a
+        // backend C++ exception cross JNI: Android otherwise terminates the
+        // process with SIGABRT before Kotlin can show or recover from the error.
+        LOGE("llama_decode threw during %s: %s", operation, error.what());
+        return 2;
+    } catch (...) {
+        LOGE("llama_decode threw an unknown exception during %s", operation);
+        return 2;
+    }
+    return 0;
+}
+
 int decode_tokens(const llama_tokens & tokens, llama_pos start_pos, bool compute_last_logit) {
     if (tokens.empty()) {
         return 0;
@@ -267,14 +278,34 @@ int decode_tokens(const llama_tokens & tokens, llama_pos start_pos, bool compute
             common_batch_add(g_batch, tokens[i + j], start_pos + i + j, {0}, want_logit);
         }
 
-        const int decode_result = llama_decode(g_context, g_batch);
+        const int decode_result = decode_batch("token batch");
         if (decode_result != 0) {
-            LOGE("llama_decode failed: %d", decode_result);
-            return 1;
+            return decode_result;
         }
     }
 
     return 0;
+}
+
+bool close_thinking_section(const char * reason) {
+    const std::string closing_text(FORCED_THINKING_CLOSE);
+    const llama_tokens closing_tokens = common_tokenize(g_context, closing_text, false, false);
+    if (closing_tokens.empty() || !ensure_context_capacity((int) closing_tokens.size())) {
+        return false;
+    }
+    for (const llama_token token : closing_tokens) {
+        common_sampler_accept(g_sampler, token, true);
+    }
+    if (decode_tokens(closing_tokens, g_current_position, true) != 0) {
+        return false;
+    }
+    g_current_position += (llama_pos) closing_tokens.size();
+    g_assistant << closing_text;
+    g_turn_thinking_closed = true;
+    LOGI("closed reasoning %s after %d generated tokens",
+         reason,
+         g_turn_generated_tokens);
+    return true;
 }
 
 void throw_illegal_state(JNIEnv * env, const char * message) {
@@ -287,14 +318,21 @@ void throw_illegal_state(JNIEnv * env, const char * message) {
 int process_system_prompt(const std::string & prompt) {
     reset_chat_state(true);
 
-    std::string formatted_prompt = prompt;
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
-        formatted_prompt = chat_add_and_format(ROLE_SYSTEM, prompt);
+        // Some templates (including Bonsai 27B's Qwen3.5 template) reject a
+        // system-only conversation with "No user query found". Keep the system
+        // message in structured history and render it together with the first
+        // user turn instead of invoking the template during model loading.
+        common_chat_msg system_message;
+        system_message.role = ROLE_SYSTEM;
+        system_message.content = prompt;
+        g_chat_messages.push_back(std::move(system_message));
+        return 0;
     }
 
     const llama_tokens tokens = common_tokenize(
-            g_context, formatted_prompt, has_chat_template, has_chat_template);
+            g_context, prompt, false, false);
     if ((int) tokens.size() > g_context_size - OVERFLOW_HEADROOM) {
         LOGE("system prompt too long: %d tokens", (int) tokens.size());
         return 1;
@@ -506,17 +544,28 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeLoad(
 
     g_context_size = std::max(512, (int) context_size);
 
-    llama_model_params model_params = llama_model_default_params();
-    const bool request_gpu = g_gpu_device != nullptr && llama_supports_gpu_offload();
-    // Limit Adreno to the Q1_0 output projection. Full repeating-layer offload
-    // currently returns invalid activations on this driver, while this matrix
-    // path is stable and retains the verified ARM CPU transformer path.
-    model_params.n_gpu_layers = request_gpu ? 1 : 0;
     const char * model_path_chars = env->GetStringUTFChars(model_path, nullptr);
+    const int64_t model_bytes = model_file_size(model_path_chars);
+    llama_model_params model_params = llama_model_default_params();
+    const bool gpu_available = g_gpu_device != nullptr && llama_supports_gpu_offload();
+    const bool small_gpu_candidate = gpu_available && model_bytes > 0 &&
+            model_bytes <= ADRENO_GPU_MODEL_MAX_BYTES;
+    const bool gpu_blocked = gpu_available && is_gpu_offload_blocked() && !small_gpu_candidate;
+    const bool request_gpu = gpu_available && !gpu_blocked;
+    // Q1_0 full-model Vulkan offload produces invalid activations on the
+    // connected Adreno driver. Small models can still use the conservative
+    // output-projection path; larger models retain the established device
+    // safety block.
+    model_params.n_gpu_layers = request_gpu ? 1 : 0;
     LOGI(
-            "loading model: %s (GPU offload: %s)",
+            "loading model: %s (%lld bytes, GPU offload: %s)",
             model_path_chars,
-            request_gpu ? "Q1_0 output projection" : "disabled");
+            static_cast<long long>(model_bytes),
+            request_gpu ? "output projection" : "disabled");
+    if (gpu_blocked) {
+        LOGW("Vulkan offload disabled for %s after VK_ERROR_DEVICE_LOST crashes",
+             g_accelerator_description.c_str());
+    }
     g_model = llama_model_load_from_file(model_path_chars, model_params);
     if (g_model == nullptr && request_gpu) {
         LOGW("GPU model load failed; retrying with CPU fallback");
@@ -531,7 +580,9 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeLoad(
     }
 
     g_gpu_enabled = request_gpu && model_params.n_gpu_layers != 0;
-    g_compute_backend = g_gpu_enabled ? "Hybrid CPU + " + g_accelerator_description : "CPU";
+    g_compute_backend = g_gpu_enabled
+            ? "Hybrid CPU + " + g_accelerator_description
+            : (gpu_blocked ? "CPU (Adreno Vulkan safety fallback)" : "CPU");
     g_batch_size = g_gpu_enabled ? HYBRID_GPU_BATCH_SIZE : CPU_BATCH_SIZE;
     LOGI("active compute backend: %s", g_compute_backend.c_str());
 
@@ -614,15 +665,54 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativePreparePrompt(
 
     std::string formatted_prompt = prompt_string;
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
+    std::vector<common_chat_msg> turn_messages;
     if (has_chat_template) {
-        formatted_prompt = chat_add_and_format(ROLE_USER, prompt_string);
+        common_chat_msg user_message;
+        user_message.role = ROLE_USER;
+        user_message.content = prompt_string;
+        turn_messages = g_chat_messages;
+        turn_messages.push_back(std::move(user_message));
+
+        common_chat_templates_inputs template_inputs;
+        template_inputs.messages = turn_messages;
+        template_inputs.add_generation_prompt = true;
+        template_inputs.use_jinja = true;
+        template_inputs.enable_thinking = enable_thinking == JNI_TRUE;
+        // The app parses text/reasoning tags itself and does not use tool-call
+        // grammars. Avoid automatic output-parser generation, which can invoke
+        // template branches unrelated to prompt rendering and throw.
+        template_inputs.force_pure_content = true;
+        try {
+            formatted_prompt = common_chat_templates_apply(
+                    g_chat_templates.get(), template_inputs).prompt;
+        } catch (const std::exception & error) {
+            LOGE("chat template failed for user turn: %s", error.what());
+            return 6;
+        } catch (...) {
+            LOGE("chat template failed for user turn with an unknown exception");
+            return 6;
+        }
+
+        // The whole structured conversation is rendered for each turn. This
+        // avoids diff-formatting the system-only prefix, which is invalid for
+        // Qwen3.5 templates that require a user query.
+        llama_memory_clear(llama_get_memory(g_context), false);
+        g_system_position = 0;
+        g_current_position = 0;
+    } else if (enable_thinking == JNI_TRUE) {
+        LOGE("thinking mode requires an embedded chat template");
+        return 5;
     }
     if (enable_thinking == JNI_TRUE) {
-        if (!has_chat_template || !enable_thinking_in_generation_prompt(formatted_prompt)) {
-            LOGE("thinking mode is incompatible with this model's chat template");
-            return 5;
-        }
         g_turn_thinking_enabled = true;
+        LOGI("thinking enabled through chat-template parameters");
+    }
+    if (formatted_prompt.empty()) {
+        LOGE("chat template produced an empty prompt");
+        return 6;
+    }
+    if (has_chat_template) {
+        LOGD("formatted conversation with %d messages", (int) turn_messages.size());
     }
     LOGI("preparing prompt: thinking=%s max_tokens=%d",
          g_turn_thinking_enabled ? "enabled" : "disabled",
@@ -646,6 +736,9 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativePreparePrompt(
     }
 
     g_current_position += (llama_pos) tokens.size();
+    if (has_chat_template) {
+        g_chat_messages = std::move(turn_messages);
+    }
     g_stop_position = g_current_position + std::max(1, (int) max_tokens);
     return 0;
 }
@@ -675,38 +768,33 @@ Java_com_prismml_bonsai_runtime_BonsaiEngine_nativeNextToken(JNIEnv * env, jobje
         g_turn_generated_tokens >= THINKING_TOKEN_BUDGET &&
         g_cached_token_chars.empty() &&
         !ends_with_partial_thinking_close(g_assistant.str())) {
-        const std::string closing_text(FORCED_THINKING_CLOSE);
-        const llama_tokens closing_tokens = common_tokenize(g_context, closing_text, false, false);
-        if (closing_tokens.empty() || !ensure_context_capacity((int) closing_tokens.size())) {
+        if (!close_thinking_section("at the reasoning budget")) {
             finish_assistant_message();
             throw_illegal_state(env, "Could not reserve space for the final answer");
             return nullptr;
         }
-        for (const llama_token token : closing_tokens) {
-            common_sampler_accept(g_sampler, token, true);
-        }
-        if (decode_tokens(closing_tokens, g_current_position, true) != 0) {
-            finish_assistant_message();
-            throw_illegal_state(env, "Could not close the reasoning section");
-            return nullptr;
-        }
-        g_current_position += (llama_pos) closing_tokens.size();
-        g_assistant << closing_text;
-        g_turn_thinking_closed = true;
-        LOGI("closed reasoning after %d generated tokens to preserve final-answer budget",
-             g_turn_generated_tokens);
-
-        const Utf8Conversion conversion = convert_utf8(closing_text);
+        const Utf8Conversion conversion = convert_utf8(FORCED_THINKING_CLOSE);
         return new_java_string(env, conversion.utf16);
     }
 
     const llama_token new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+    if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id) &&
+        g_turn_thinking_enabled &&
+        !g_turn_thinking_closed) {
+        LOGW("model emitted end-of-generation before closing reasoning; continuing to final answer");
+        if (!close_thinking_section("after an early end-of-generation token")) {
+            finish_assistant_message();
+            throw_illegal_state(env, "Could not close the reasoning section");
+            return nullptr;
+        }
+        const Utf8Conversion conversion = convert_utf8(FORCED_THINKING_CLOSE);
+        return new_java_string(env, conversion.utf16);
+    }
     common_sampler_accept(g_sampler, new_token_id, true);
 
     common_batch_clear(g_batch);
     common_batch_add(g_batch, new_token_id, g_current_position, {0}, true);
-    if (llama_decode(g_context, g_batch) != 0) {
-        LOGE("llama_decode failed for generated token");
+    if (decode_batch("generated token") != 0) {
         finish_assistant_message();
         throw_illegal_state(env, "Native token decoding failed");
         return nullptr;

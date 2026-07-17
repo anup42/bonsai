@@ -16,4 +16,5 @@
     <color name="accent_dark">#0D5637</color>
     <color name="on_accent">#FFFFFF</color>
     <color name="outline">#CDD7CF</color>
+    <color name="error">#B3261E</color>
 </resources>

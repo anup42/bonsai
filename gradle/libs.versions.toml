@@ -8,6 +8,7 @@ constraintlayout = "2.2.1"
 coroutines = "1.10.2"
 lifecycle = "2.10.0"
 material = "1.13.0"
+markwon = "4.6.2"
 junit = "4.13.2"
 recyclerview = "1.4.0"
 
@@ -25,4 +26,5 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+markwon-core = { group = "io.noties.markwon", name = "core", version.ref = "markwon" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

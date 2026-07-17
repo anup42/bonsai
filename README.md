@@ -1,20 +1,23 @@
-# Bonsai Mobile
+# iBit
 
-An offline Android demo for PrismML's end-to-end 1-bit Bonsai 8B model. The app runs the Apache-2.0 `Bonsai-8B-Q1_0.gguf` locally through the PrismML llama.cpp fork. Prompts, reasoning, and generated answers stay on the phone.
+iBit is an offline Android app for PrismML's 1-bit and ternary Bonsai language models. It downloads and runs official Apache-2.0 GGUF artifacts locally through the PrismML llama.cpp fork. Prompts, reasoning, and generated answers stay on the phone.
 
 ## Features
 
-- Hybrid ARM64 CPU + Vulkan inference with safe CPU fallback
+- ARM64 inference with automatic, model-size-aware Vulkan output-layer offload and CPU safety fallback
 - Streaming chat with generated-token count and llama.cpp generation throughput
 - Optional **Thinking** mode with reasoning and final answer displayed separately
 - 160-token direct turns and 512-token thinking turns with a reserved final-answer budget
-- Direct, resumable download from the official PrismML Hugging Face repository
+- An eight-model catalog covering 1.7B, 4B, 8B, and 27B 1-bit and ternary variants
+- Per-model selection, resumable background download, switching, and deletion
+- Direct download from commit-pinned official PrismML Hugging Face repositories
+- Foreground-service notifications with live progress and Stop actions for downloads and inference
 - Local GGUF import through Android's document picker
 - Published SHA-256 verification before a downloaded or imported model is used
 - A 4,096-token context and an automatic post-load inference check
 - Private app storage with Android backup disabled
 
-The verified Adreno configuration offloads the output projection (`1/37` model layers) to Vulkan and keeps the repeating transformer layers and KV cache on the CPU. See [ON_DEVICE_INFERENCE.md](ON_DEVICE_INFERENCE.md) for the complete runtime design, limitations, verification evidence, and troubleshooting guide.
+The Vulkan backend is packaged and selected automatically. On the verified Adreno 830 device, model artifacts up to and including Ternary Bonsai 4B Q2_0 (1,074,969,344 bytes, shown as 1.00 GiB) use a conservative hybrid path that offloads the output projection to Vulkan. Larger artifacts stay on ARM CPU because the next catalog size, Bonsai 8B Q1_0, produced repeatable `VK_ERROR_DEVICE_LOST` crashes under the same one-layer strategy. Full-model Vulkan offload is not enabled because it produced invalid all-zero output even with Bonsai 1.7B. See [ON_DEVICE_INFERENCE.md](ON_DEVICE_INFERENCE.md) for the complete runtime design, safety policy, verification evidence, and troubleshooting guide.
 
 ## Build
 
@@ -42,13 +45,18 @@ Install on an authorized ARM64 Android device:
 
 ```powershell
 adb install -r app\build\outputs\apk\debug\app-debug.apk
-adb shell am start -n com.prismml.bonsai/.MainActivity
+adb shell am start -n com.samsung.ibit/.MainActivity
 ```
 
-The 1.08 GiB model is deliberately not bundled in the APK. If it is missing, the app presents **Download 1.08 GiB** and **Import file** actions. Download shows the source and size before starting, stores resumable progress in private app storage, verifies the publisher's SHA-256, then loads the model and runs an automatic local inference check. An interrupted download can be resumed on the next launch.
+Models are deliberately not bundled in the APK. Select **Models** to see all supported text variants and their on-device state, then choose one to download, resume, activate, or delete. A `dataSync` foreground service keeps a selected download running when the app is backgrounded, displays live progress in an ongoing notification, and provides a Stop action that preserves the resumable `.part` file. Model generation uses a separate foreground service with its own progress notification and Stop action. Every artifact has an exact expected byte count and SHA-256 in the app catalog; a download or import is not loaded until both checks and the GGUF signature pass. The 27B entries are marked experimental because their storage and runtime-memory requirements exceed many phones. Bonsai Image is not listed because image generation needs a separate diffusion runtime rather than this app's llama.cpp text engine.
+
+| Model family | Sizes | App GGUF format |
+| --- | --- | --- |
+| Bonsai 1-bit | 1.7B, 4B, 8B, 27B | `Q1_0` |
+| Ternary Bonsai | 1.7B, 4B, 8B, 27B | `Q2_0` |
 
 ## Sources
 
 - [PrismML announcement](https://prismml.com/news/bonsai-8b)
-- [Official 1-bit GGUF model](https://huggingface.co/prism-ml/Bonsai-8B-gguf)
+- [PrismML models on Hugging Face](https://huggingface.co/prism-ml/models)
 - [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp)

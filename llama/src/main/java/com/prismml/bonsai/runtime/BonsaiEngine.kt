@@ -153,7 +153,7 @@ class BonsaiEngine private constructor(
         private const val DEFAULT_MAX_TOKENS = 160
         private const val MAX_GENERATION_TOKENS = 512
         private const val SYSTEM_PROMPT =
-            "You are Bonsai, a helpful and concise assistant. Answer accurately and clearly. If a thinking section is opened, keep it brief, double-check factual and numerical claims, close it, and always provide a clear final answer."
+            "You are iBit, a helpful and concise on-device assistant powered by a Bonsai model. Answer accurately and clearly. If a thinking section is opened, keep it brief, double-check factual and numerical claims, close it, and always provide a clear final answer."
 
         @Volatile
         private var instance: BonsaiEngine? = null

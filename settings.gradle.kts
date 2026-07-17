@@ -14,6 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "BonsaiMobile"
+rootProject.name = "IBitMobile"
 include(":app")
 include(":llama")

@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
-    message(FATAL_ERROR "Bonsai Mobile currently supports arm64-v8a only")
+    message(FATAL_ERROR "iBit currently supports arm64-v8a only")
 endif()
 
 set(GGML_SYSTEM_ARCH ARM)

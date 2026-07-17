@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.prismml.bonsai"
+    namespace = "com.samsung.ibit"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.prismml.bonsai"
+        applicationId = "com.samsung.ibit"
         minSdk = 28
         targetSdk = 36
         versionCode = 1
@@ -17,6 +17,29 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
+    buildFeatures {
+        buildConfig = false
     }
 
     compileOptions {
@@ -32,6 +55,7 @@ android {
 
     packaging {
         jniLibs.useLegacyPackaging = true
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
 
@@ -43,6 +67,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.recyclerview)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.markwon.core)
     implementation(libs.material)
     testImplementation(libs.junit)
 }

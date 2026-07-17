@@ -1,4 +1,4 @@
-package com.prismml.bonsai
+package com.samsung.ibit
 
 /** Strict validation for an HTTP response to `Range: bytes=<offset>-`. */
 internal object ModelDownloadProtocol {

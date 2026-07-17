@@ -1,4 +1,4 @@
-package com.prismml.bonsai
+package com.samsung.ibit
 
 internal data class ParsedModelResponse(
     val reasoning: String,
